@@ -4,3 +4,4 @@ build
 models/
 .DS_Store
 compile_commands.json
+.clangd
