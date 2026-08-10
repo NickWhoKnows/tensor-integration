@@ -290,7 +290,21 @@ std::string Tokenizer::decode(const std::vector<int32_t> &tokens) const
         {
             continue;
         }
-        text += token_to_piece(token);
+
+        const std::string &piece = token_to_piece(token);
+        for (size_t i = 0; i < piece.size();)
+        {
+            const unsigned char c = static_cast<unsigned char>(piece[i]);
+            // Llama BPE space marker U+0120 (Ġ)
+            if (c == 0xC4 && i + 1 < piece.size() && static_cast<unsigned char>(piece[i + 1]) == 0xA0)
+            {
+                text += ' ';
+                i += 2;
+                continue;
+            }
+
+            text += piece[i++];
+        }
     }
     return text;
 }

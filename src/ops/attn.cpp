@@ -28,14 +28,13 @@ ggml_tensor *concat_past_kv(ggml_context *ctx, ggml_tensor *cache_kv, ggml_tenso
 } // namespace
 
 ggml_tensor *attention(ggml_context *ctx, ggml_tensor *x, const AttnWeights &weights,
-                       const model::Config &config, runtime::LayerKvCache *cache,
-                       const int position_offset)
+                       const model::Config &config, ggml_tensor *positions,
+                       runtime::LayerKvCache *cache, const int position_offset)
 {
     const int head_dim = config.n_embd / config.n_head;
     const int n_tokens = static_cast<int>(x->ne[1]);
     const float kq_scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    ggml_tensor *positions = make_positions(ctx, n_tokens, position_offset);
     ggml_tensor *cur = rms_norm(ctx, x, weights.norm, config.rms_norm_eps);
 
     ggml_tensor *q_cur = ggml_mul_mat(ctx, weights.q, cur);
@@ -50,14 +49,26 @@ ggml_tensor *attention(ggml_context *ctx, ggml_tensor *x, const AttnWeights &wei
     k_new = apply_rope(ctx, k_new, positions, config);
     v_new = apply_rope(ctx, v_new, positions, config);
 
+    ggml_tensor *k = k_new;
+    ggml_tensor *v = v_new;
     if (cache != nullptr)
     {
-        cache->last_k = k_new;
-        cache->last_v = v_new;
-    }
+        const size_t slot_offset = static_cast<size_t>(position_offset) * cache->k->nb[2];
+        ggml_tensor *k_slot =
+            ggml_view_3d(ctx, cache->k, head_dim, config.n_head_kv, n_tokens, cache->k->nb[1],
+                         cache->k->nb[2], slot_offset);
+        ggml_tensor *v_slot =
+            ggml_view_3d(ctx, cache->v, head_dim, config.n_head_kv, n_tokens, cache->v->nb[1],
+                         cache->v->nb[2], slot_offset);
 
-    ggml_tensor *k = cache != nullptr ? concat_past_kv(ctx, cache->k, k_new, position_offset) : k_new;
-    ggml_tensor *v = cache != nullptr ? concat_past_kv(ctx, cache->v, v_new, position_offset) : v_new;
+        cache->last_k = ggml_cpy(ctx, k_new, k_slot);
+        cache->last_v = ggml_cpy(ctx, v_new, v_slot);
+        ggml_set_output(cache->last_k);
+        ggml_set_output(cache->last_v);
+
+        k = concat_past_kv(ctx, cache->k, k_new, position_offset);
+        v = concat_past_kv(ctx, cache->v, v_new, position_offset);
+    }
 
     const int n_kv = cache != nullptr ? position_offset + n_tokens : n_tokens;
 

@@ -1,18 +1,13 @@
 #include "tllm/ops/rope.h"
 
-#include <cstring>
-
 namespace tllm::ops
 {
 
-ggml_tensor *make_positions(ggml_context *ctx, const int n_tokens, const int offset)
+ggml_tensor *make_positions_input(ggml_context *ctx, const int n_tokens)
 {
     ggml_tensor *positions = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tokens);
-    int32_t *data = static_cast<int32_t *>(positions->data);
-    for (int i = 0; i < n_tokens; ++i)
-    {
-        data[i] = offset + i;
-    }
+    ggml_set_name(positions, "rope_positions");
+    ggml_set_input(positions);
     return positions;
 }
 

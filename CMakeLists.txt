@@ -21,6 +21,7 @@ add_library(tllm STATIC
     src/ops/attn.cpp
     src/ops/embed.cpp
     src/runtime/compute.cpp
+    src/runtime/backend.cpp
     src/runtime/kv_cache.cpp
 )
 

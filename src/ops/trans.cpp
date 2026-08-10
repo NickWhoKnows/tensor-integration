@@ -6,10 +6,10 @@ namespace tllm::ops {
 
 Layer::~Layer() {}
 
-ggml_tensor *Layer::block_transformer(ggml_context *ctx, ggml_tensor *x,
+ggml_tensor *Layer::block_transformer(ggml_context *ctx, ggml_tensor *x, ggml_tensor *positions,
                                       runtime::LayerKvCache *cache,
                                       const int position_offset) {
-  ggml_tensor *attn_out = attention(ctx, x, attn_weights_, config_, cache, position_offset);
+  ggml_tensor *attn_out = attention(ctx, x, attn_weights_, config_, positions, cache, position_offset);
   ggml_tensor *after_attn = ggml_add(ctx, x, attn_out);
   ggml_tensor *ffn_out = ffn(ctx, after_attn, ffn_weights_, config_.rms_norm_eps);
   return ggml_add(ctx, after_attn, ffn_out);
