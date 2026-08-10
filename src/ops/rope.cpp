@@ -20,7 +20,7 @@ ggml_tensor *apply_rope(ggml_context *ctx, ggml_tensor *qkv, ggml_tensor *positi
                         const model::Config &config)
 {
     return ggml_rope_ext(ctx, qkv, positions, config.rope_freqs, config.rope_dimension_count,
-                         GGML_ROPE_TYPE_NEOX, config.n_ctx, config.rope_freq_base, 1.0f, 0.0f,
+                         GGML_ROPE_TYPE_NORMAL, config.n_ctx, config.rope_freq_base, 1.0f, 0.0f,
                          1.0f, 0.0f, 0.0f);
 }
 

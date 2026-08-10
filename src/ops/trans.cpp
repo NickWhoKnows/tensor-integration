@@ -7,16 +7,10 @@ namespace tllm::ops {
 Layer::~Layer() {}
 
 ggml_tensor *Layer::block_transformer(ggml_context *ctx, ggml_tensor *x) {
-  // attn wiht rms norm
   ggml_tensor *attn_out = attention(ctx, x, attn_weights_, config_);
-  // first residual
   ggml_tensor *after_attn = ggml_add(ctx, x, attn_out);
-  // ffn with rms norm
-  ggml_tensor *ffn_out =
-      ffn(ctx, after_attn, ffn_weights_, config_.rms_norm_eps);
-  // second residual
-  ggml_tensor *after_ffn = ggml_add(ctx, after_attn, ffn_out);
-  return after_ffn;
+  ggml_tensor *ffn_out = ffn(ctx, after_attn, ffn_weights_, config_.rms_norm_eps);
+  return ggml_add(ctx, after_attn, ffn_out);
 }
 
 void Layer::print_attn_weights() {

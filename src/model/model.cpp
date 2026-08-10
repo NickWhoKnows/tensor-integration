@@ -6,7 +6,9 @@
 
 #include "ggml-cpu.h"
 
+#include <algorithm>
 #include <iostream>
+#include <utility>
 
 namespace tllm::model
 {
@@ -64,6 +66,38 @@ int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &token
 
     const int32_t *predicted_ids = static_cast<const int32_t *>(predicted->data);
     return predicted_ids[predicted->ne[0] - 1];
+}
+
+void Model::print_top_logits(ggml_context *ctx, const std::vector<int32_t> &tokens, const int k) const
+{
+    ggml_tensor *logits = forward(ctx, tokens);
+
+    ggml_cgraph *graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, logits);
+    ggml_graph_compute_with_ctx(ctx, graph, 1);
+
+    const int vocab = static_cast<int>(logits->ne[0]);
+    const int pos = static_cast<int>(logits->ne[1]) - 1;
+    const float *row = static_cast<const float *>(logits->data) + static_cast<size_t>(pos) * vocab;
+
+    std::vector<std::pair<float, int32_t>> scored;
+    scored.reserve(static_cast<size_t>(vocab));
+    for (int id = 0; id < vocab; ++id)
+    {
+        scored.emplace_back(row[id], id);
+    }
+
+    const int top_k = std::min(k, vocab);
+    std::partial_sort(scored.begin(), scored.begin() + top_k, scored.end(),
+                      [](const auto &a, const auto &b) { return a.first > b.first; });
+
+    std::cout << "Top-" << top_k << " logits at position " << pos << ":\n";
+    for (int i = 0; i < top_k; ++i)
+    {
+        const int32_t id = scored[static_cast<size_t>(i)].second;
+        std::cout << "  " << (i + 1) << ": id=" << id << " logit=" << scored[static_cast<size_t>(i)].first
+                  << " piece=\"" << tokenizer_.token_to_piece(id) << "\"\n";
+    }
 }
 
 std::vector<int32_t> Model::generate(ggml_context *ctx, std::vector<int32_t> tokens, const int n_new_tokens) const

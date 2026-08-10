@@ -3,8 +3,6 @@
 #include "tllm/model/model.h"
 #include "tllm/tokenizer/tokenizer.h"
 
-#include "ggml.h"
-
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -13,18 +11,20 @@
 namespace {
 
 void print_usage(const char *program) {
-  std::cerr << "Usage: " << program << " [--model PATH] [--prompt TEXT] [--n N]\n"
+  std::cerr << "Usage: " << program << " [--model PATH] [--prompt TEXT] [--n N] [--verify]\n"
             << "\n"
             << "  --model PATH    GGUF model file (default: "
                "models/Llama-3.2-1B-Instruct.gguf)\n"
             << "  --prompt TEXT   Prompt to tokenize and run through the model\n"
-            << "  --n N           Number of tokens to generate (default: 10)\n";
+            << "  --n N           Number of tokens to generate (default: 10)\n"
+            << "  --verify        Print config + top-k logits (no generation)\n";
 }
 
 struct Options {
   std::string model_path = "models/Llama-3.2-1B-Instruct.gguf";
   std::string prompt = "Hello";
   int n_generate = 10;
+  bool verify = false;
 };
 
 std::string resolve_model_path(const std::string &path) {
@@ -50,6 +50,8 @@ Options parse_args(int argc, char **argv) {
       options.prompt = argv[++i];
     } else if ((arg == "--n" || arg == "-n") && i + 1 < argc) {
       options.n_generate = std::stoi(argv[++i]);
+    } else if (arg == "--verify") {
+      options.verify = true;
     } else if (arg == "--help" || arg == "-h") {
       print_usage(argv[0]);
       std::exit(0);
@@ -67,13 +69,22 @@ void run_inference(const Options &options) {
   const tllm::tokenizer::Tokenizer tokenizer =
       tllm::tokenizer::Tokenizer::from_gguf(loader);
 
+  tllm::model::Model model(loader, config, tokenizer);
+
   std::cout << "Model: " << config.architecture << "\n"
             << "  layers: " << config.n_layer << "\n"
             << "  embed:  " << config.n_embd << "\n"
+            << "  heads:  " << config.n_head << " (kv=" << config.n_head_kv << ")\n"
+            << "  rope:   dim=" << config.rope_dimension_count
+            << " base=" << config.rope_freq_base
+            << " freqs=" << (model.config().rope_freqs ? "yes" : "no") << "\n"
             << "  vocab:  " << tokenizer.vocab_size() << "\n"
             << "  params: " << loader.total_parameters() << "\n";
 
-  tllm::model::Model model(loader, config, tokenizer);
+  if (auto *embd = loader.find_tensor("token_embd.weight")) {
+    std::cout << "  token_embd.type: " << embd->type << "\n";
+  }
+
   std::vector<int32_t> tokens = model.tokenize(options.prompt);
 
   std::cout << "Prompt: \"" << options.prompt << "\"\n"
@@ -82,12 +93,18 @@ void run_inference(const Options &options) {
     if (i > 0) {
       std::cout << ", ";
     }
-    std::cout << tokens[i];
+    std::cout << tokens[i] << "(\"" << tokenizer.token_to_piece(tokens[i]) << "\")";
   }
   std::cout << "\n";
 
   ggml_context *ctx = loader.context();
   ggml_set_no_alloc(ctx, false);
+
+  if (options.verify) {
+    model.print_top_logits(ctx, tokens, 10);
+    std::cout << "\nReference (llama.cpp): top token id=0 \"!\" logit~18.96 for prompt \"Hello\"\n";
+    return;
+  }
 
   std::cout << "Generating " << options.n_generate << " tokens:\n";
   tokens = model.generate(ctx, std::move(tokens), options.n_generate);
