@@ -47,6 +47,23 @@ bool is_llama_bpe_pre(const std::string &pre)
     return pre == "llama-bpe" || pre == "llama3" || pre == "llama-v3";
 }
 
+std::string normalize_llama_piece(const std::string &piece)
+{
+    std::string out;
+    out.reserve(piece.size());
+
+    size_t i = 0;
+    while (i < piece.size() && piece[i] == ' ')
+    {
+        out.push_back(static_cast<char>(0xC4));
+        out.push_back(static_cast<char>(0xA0));
+        ++i;
+    }
+
+    out.append(piece, i, std::string::npos);
+    return out;
+}
+
 } // namespace
 
 Tokenizer Tokenizer::from_gguf(const gguf::Loader &loader)
@@ -121,9 +138,11 @@ std::vector<std::string> Tokenizer::pretokenize(const std::string &text) const
 
 std::vector<int32_t> Tokenizer::encode_piece(const std::string &piece) const
 {
+    const std::string vocab_piece = ignore_merges_ ? normalize_llama_piece(piece) : piece;
+
     if (ignore_merges_)
     {
-        const auto whole = token_to_id_.find(piece);
+        const auto whole = token_to_id_.find(vocab_piece);
         if (whole != token_to_id_.end())
         {
             return {whole->second};
@@ -131,14 +150,14 @@ std::vector<int32_t> Tokenizer::encode_piece(const std::string &piece) const
     }
 
     std::vector<Symbol> symbols;
-    symbols.reserve(piece.size());
+    symbols.reserve(vocab_piece.size());
 
     size_t offset = 0;
     int index = 0;
-    while (offset < piece.size())
+    while (offset < vocab_piece.size())
     {
         size_t char_len = 1;
-        const unsigned char c = static_cast<unsigned char>(piece[offset]);
+        const unsigned char c = static_cast<unsigned char>(vocab_piece[offset]);
         if ((c & 0xE0) == 0xC0)
         {
             char_len = 2;
@@ -151,13 +170,13 @@ std::vector<int32_t> Tokenizer::encode_piece(const std::string &piece) const
         {
             char_len = 4;
         }
-        char_len = std::min(char_len, piece.size() - offset);
+        char_len = std::min(char_len, vocab_piece.size() - offset);
 
         Symbol sym;
-        sym.text = piece.c_str() + offset;
+        sym.text = vocab_piece.c_str() + offset;
         sym.n = char_len;
         sym.prev = index - 1;
-        sym.next = (offset + char_len >= piece.size()) ? -1 : index + 1;
+        sym.next = (offset + char_len >= vocab_piece.size()) ? -1 : index + 1;
         symbols.push_back(sym);
 
         offset += char_len;
@@ -281,6 +300,34 @@ std::string Tokenizer::token_to_piece(const int32_t token) const
     return id_to_token_[static_cast<size_t>(token)];
 }
 
+std::string Tokenizer::piece_to_text(const std::string &piece) const
+{
+    std::string text;
+    for (size_t i = 0; i < piece.size();)
+    {
+        if (i + 1 < piece.size() && static_cast<unsigned char>(piece[i]) == 0xC4)
+        {
+            const unsigned char next = static_cast<unsigned char>(piece[i + 1]);
+            if (next == 0xA0)
+            {
+                text += ' ';
+                i += 2;
+                continue;
+            }
+            if (next == 0x8A)
+            {
+                text += '\n';
+                i += 2;
+                continue;
+            }
+        }
+
+        text += piece[i++];
+    }
+
+    return text;
+}
+
 std::string Tokenizer::decode(const std::vector<int32_t> &tokens) const
 {
     std::string text;
@@ -291,20 +338,22 @@ std::string Tokenizer::decode(const std::vector<int32_t> &tokens) const
             continue;
         }
 
-        const std::string &piece = token_to_piece(token);
-        for (size_t i = 0; i < piece.size();)
-        {
-            const unsigned char c = static_cast<unsigned char>(piece[i]);
-            // Llama BPE space marker U+0120 (Ġ)
-            if (c == 0xC4 && i + 1 < piece.size() && static_cast<unsigned char>(piece[i + 1]) == 0xA0)
-            {
-                text += ' ';
-                i += 2;
-                continue;
-            }
+        text += token_to_piece(token);
+    }
+    return text;
+}
 
-            text += piece[i++];
+std::string Tokenizer::format_generation(const std::vector<int32_t> &tokens) const
+{
+    std::string text;
+    for (const int32_t token : tokens)
+    {
+        if (token == bos_id_ || token == eos_id_)
+        {
+            continue;
         }
+
+        text += piece_to_text(token_to_piece(token));
     }
     return text;
 }

@@ -37,8 +37,8 @@ void print_usage(const char *program) {
 
 struct Options {
   std::string model_path = "models/Llama-3.2-1B-Instruct.gguf";
-  std::string prompt = "Good Morning";
-  int n_generate = 100;
+  std::string prompt = "Hi You are steve";
+  int n_generate = 500;
   bool verify = false;
   bool force_cpu = false;
 };
@@ -136,7 +136,7 @@ void run_inference(const Options &options) {
   tokens = model.generate(ctx, std::move(tokens), options.n_generate);
   loader.release_backend_weights();
 
-  std::cout << tokenizer.decode(tokens) << "\n";
+  std::cout << tokenizer.format_generation(tokens) << "\n";
 }
 
 } // namespace

@@ -21,6 +21,37 @@ namespace tllm::model
 namespace
 {
 
+constexpr float kRepetitionPenalty = 1.15f;
+constexpr int kRepetitionWindow = 64;
+
+void apply_repetition_penalty(std::vector<float> &row, const std::vector<int32_t> &history)
+{
+    const int start = std::max(0, static_cast<int>(history.size()) - kRepetitionWindow);
+    for (size_t i = static_cast<size_t>(start); i < history.size(); ++i)
+    {
+        const int id = history[static_cast<size_t>(i)];
+        if (id < 0 || id >= static_cast<int>(row.size()))
+        {
+            continue;
+        }
+
+        float &logit = row[static_cast<size_t>(id)];
+        if (logit > 0.0f)
+        {
+            logit /= kRepetitionPenalty;
+        }
+        else
+        {
+            logit *= kRepetitionPenalty;
+        }
+    }
+}
+
+} // namespace
+
+namespace
+{
+
 int practical_ctx(const Config &config)
 {
     return std::min(config.n_ctx, 2048);
@@ -196,6 +227,51 @@ int32_t Model::argmax_last(ggml_context *ctx, ggml_tensor *logits,
     return predicted_id;
 }
 
+int32_t Model::argmax_with_penalty(ggml_context *ctx, ggml_tensor *logits,
+                                   const std::vector<int32_t> &tokens, const int position_offset,
+                                   const runtime::KvCache *cache,
+                                   const std::vector<int32_t> &history) const
+{
+    ggml_cgraph *graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, logits);
+    if (cache != nullptr)
+    {
+        for (int i = 0; i < config_.n_layer; ++i)
+        {
+            const runtime::LayerKvCache &layer = cache->layer(i);
+            if (layer.last_k != nullptr)
+            {
+                ggml_build_forward_expand(graph, layer.last_k);
+            }
+            if (layer.last_v != nullptr)
+            {
+                ggml_build_forward_expand(graph, layer.last_v);
+            }
+        }
+    }
+    execute_graph(ctx, graph, GraphInputs{.tokens = &tokens, .position_offset = position_offset});
+
+    const int vocab = static_cast<int>(logits->ne[0]);
+    const int pos = static_cast<int>(logits->ne[1]) - 1;
+
+    std::vector<float> row(static_cast<size_t>(vocab));
+    const size_t row_offset = static_cast<size_t>(pos) * static_cast<size_t>(vocab) * sizeof(float);
+    if (backend_ != nullptr)
+    {
+        backend_->tensor_get(logits, row.data(), row_offset, row.size() * sizeof(float));
+    }
+    else
+    {
+        const float *src = static_cast<const float *>(logits->data) + static_cast<size_t>(pos) * vocab;
+        std::copy(src, src + vocab, row.begin());
+    }
+
+    apply_repetition_penalty(row, history);
+
+    return static_cast<int32_t>(
+        std::distance(row.begin(), std::max_element(row.begin(), row.end())));
+}
+
 void Model::commit_cache(runtime::KvCache &cache, const int n_tokens) const
 {
     if (cache.n_past() + n_tokens > cache.max_ctx())
@@ -203,6 +279,11 @@ void Model::commit_cache(runtime::KvCache &cache, const int n_tokens) const
         throw std::runtime_error("kv cache overflow");
     }
 
+    const int head_dim = config_.n_embd / config_.n_head;
+    for (int i = 0; i < config_.n_layer; ++i)
+    {
+        cache.commit_layer(i, head_dim, config_.n_head_kv, backend_);
+    }
     cache.advance(n_tokens);
 }
 
@@ -213,11 +294,11 @@ int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &token
 }
 
 int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &tokens,
-                            runtime::KvCache &cache) const
+                            runtime::KvCache &cache, const std::vector<int32_t> &history) const
 {
     const int n_past = cache.n_past();
     ggml_tensor *logits = forward(ctx, tokens, cache);
-    const int32_t next = argmax_last(ctx, logits, tokens, n_past, &cache);
+    const int32_t next = argmax_with_penalty(ctx, logits, tokens, n_past, &cache, history);
     commit_cache(cache, static_cast<int>(tokens.size()));
     return next;
 }
@@ -279,7 +360,7 @@ std::vector<int32_t> Model::generate(ggml_context *ctx, std::vector<int32_t> tok
 
     tokens.reserve(tokens.size() + static_cast<size_t>(n_new_tokens));
 
-    int32_t next = predict_next(ctx, tokens, cache);
+    int32_t next = predict_next(ctx, tokens, cache, tokens);
     tokens.push_back(next);
     if (next == tokenizer_.eos_id())
     {
@@ -288,7 +369,7 @@ std::vector<int32_t> Model::generate(ggml_context *ctx, std::vector<int32_t> tok
 
     for (int i = 1; i < n_new_tokens; ++i)
     {
-        next = predict_next(ctx, {next}, cache);
+        next = predict_next(ctx, {next}, cache, tokens);
         tokens.push_back(next);
 
         if (next == tokenizer_.eos_id())

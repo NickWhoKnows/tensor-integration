@@ -53,18 +53,10 @@ ggml_tensor *attention(ggml_context *ctx, ggml_tensor *x, const AttnWeights &wei
     ggml_tensor *v = v_new;
     if (cache != nullptr)
     {
-        const size_t slot_offset = static_cast<size_t>(position_offset) * cache->k->nb[2];
-        ggml_tensor *k_slot =
-            ggml_view_3d(ctx, cache->k, head_dim, config.n_head_kv, n_tokens, cache->k->nb[1],
-                         cache->k->nb[2], slot_offset);
-        ggml_tensor *v_slot =
-            ggml_view_3d(ctx, cache->v, head_dim, config.n_head_kv, n_tokens, cache->v->nb[1],
-                         cache->v->nb[2], slot_offset);
-
-        cache->last_k = ggml_cpy(ctx, k_new, k_slot);
-        cache->last_v = ggml_cpy(ctx, v_new, v_slot);
-        ggml_set_output(cache->last_k);
-        ggml_set_output(cache->last_v);
+        cache->last_k = k_new;
+        cache->last_v = v_new;
+        ggml_set_output(k_new);
+        ggml_set_output(v_new);
 
         k = concat_past_kv(ctx, cache->k, k_new, position_offset);
         v = concat_past_kv(ctx, cache->v, v_new, position_offset);
