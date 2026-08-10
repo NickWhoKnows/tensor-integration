@@ -300,50 +300,42 @@ std::string Tokenizer::token_to_piece(const int32_t token) const
     return id_to_token_[static_cast<size_t>(token)];
 }
 
-std::string Tokenizer::piece_to_text(const std::string &piece) const
+bool Tokenizer::is_bpe_marker(const std::string &piece, const size_t offset, const unsigned char suffix)
+{
+    return offset + 1 < piece.size() && static_cast<unsigned char>(piece[offset]) == 0xC4 &&
+           static_cast<unsigned char>(piece[offset + 1]) == suffix;
+}
+
+std::string Tokenizer::render_piece(const std::string &piece)
 {
     std::string text;
-    for (size_t i = 0; i < piece.size();)
+    size_t i = is_bpe_marker(piece, 0, 0xA0) ? (text += ' ', 2) : 0;
+    while (i < piece.size())
     {
-        if (i + 1 < piece.size() && static_cast<unsigned char>(piece[i]) == 0xC4)
+        if (is_bpe_marker(piece, i, 0x8A))
         {
-            const unsigned char next = static_cast<unsigned char>(piece[i + 1]);
-            if (next == 0xA0)
-            {
-                text += ' ';
-                i += 2;
-                continue;
-            }
-            if (next == 0x8A)
-            {
-                text += '\n';
-                i += 2;
-                continue;
-            }
+            text += '\n';
+            i += 2;
         }
-
-        text += piece[i++];
+        else
+        {
+            text += piece[i++];
+        }
     }
-
     return text;
 }
 
 std::string Tokenizer::decode(const std::vector<int32_t> &tokens) const
 {
-    std::string text;
-    for (const int32_t token : tokens)
-    {
-        if (token == bos_id_ || token == eos_id_)
-        {
-            continue;
-        }
-
-        text += token_to_piece(token);
-    }
-    return text;
+    return format_tokens(tokens, false);
 }
 
 std::string Tokenizer::format_generation(const std::vector<int32_t> &tokens) const
+{
+    return format_tokens(tokens, true);
+}
+
+std::string Tokenizer::format_tokens(const std::vector<int32_t> &tokens, const bool render) const
 {
     std::string text;
     for (const int32_t token : tokens)
@@ -353,7 +345,8 @@ std::string Tokenizer::format_generation(const std::vector<int32_t> &tokens) con
             continue;
         }
 
-        text += piece_to_text(token_to_piece(token));
+        const std::string piece = token_to_piece(token);
+        text += render ? render_piece(piece) : piece;
     }
     return text;
 }

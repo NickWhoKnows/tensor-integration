@@ -16,13 +16,10 @@ KvCache::~KvCache()
     if (buffer_ != nullptr)
     {
         ggml_backend_buffer_free(buffer_);
-        buffer_ = nullptr;
     }
-
     if (ctx_ != nullptr)
     {
         ggml_free(ctx_);
-        ctx_ = nullptr;
     }
 }
 
@@ -33,14 +30,13 @@ void KvCache::init(const Backend &backend, const model::Config &config, const in
         throw std::runtime_error("kv cache max_ctx must be positive");
     }
 
-    head_dim_ = config.n_embd / config.n_head;
-    n_head_kv_ = config.n_head_kv;
+    const int head_dim = config.n_embd / config.n_head;
+    const int n_head_kv = config.n_head_kv;
     max_ctx_ = max_ctx;
     n_past_ = 0;
 
-    const size_t n_tensors = static_cast<size_t>(config.n_layer) * 2;
     ggml_init_params params{
-        .mem_size = ggml_tensor_overhead() * n_tensors,
+        .mem_size = ggml_tensor_overhead() * static_cast<size_t>(config.n_layer) * 2,
         .mem_buffer = nullptr,
         .no_alloc = true,
     };
@@ -55,10 +51,8 @@ void KvCache::init(const Backend &backend, const model::Config &config, const in
     for (int i = 0; i < config.n_layer; ++i)
     {
         LayerKvCache &layer = layers_[static_cast<size_t>(i)];
-        layer.k = ggml_new_tensor_3d(ctx_, GGML_TYPE_F32, head_dim_, n_head_kv_, max_ctx_);
-        layer.v = ggml_new_tensor_3d(ctx_, GGML_TYPE_F32, head_dim_, n_head_kv_, max_ctx_);
-        layer.last_k = nullptr;
-        layer.last_v = nullptr;
+        layer.k = ggml_new_tensor_3d(ctx_, GGML_TYPE_F32, head_dim, n_head_kv, max_ctx_);
+        layer.v = ggml_new_tensor_3d(ctx_, GGML_TYPE_F32, head_dim, n_head_kv, max_ctx_);
     }
 
     buffer_ = ggml_backend_alloc_ctx_tensors(ctx_, backend.cpu_handle());
@@ -80,30 +74,43 @@ void KvCache::reset()
     }
 }
 
-void KvCache::commit_layer(const int layer_index, const int head_dim, const int n_head_kv,
-                           const Backend *backend)
+void KvCache::commit_layer(LayerKvCache &layer, const Backend *backend)
 {
-    LayerKvCache &entry = layers_.at(static_cast<size_t>(layer_index));
-    if (entry.last_k == nullptr || entry.last_v == nullptr || backend == nullptr)
+    if (layer.last_k == nullptr || layer.last_v == nullptr || backend == nullptr)
     {
         return;
     }
 
-    const int n_tokens = static_cast<int>(entry.last_k->ne[2]);
+    const int n_tokens = static_cast<int>(layer.last_k->ne[2]);
+    const size_t nbytes = static_cast<size_t>(n_tokens) * layer.k->nb[2];
+    const size_t dst_offset = static_cast<size_t>(n_past_) * layer.k->nb[2];
+
+    if (layer.k->data != nullptr && ggml_backend_buffer_is_host(layer.k->buffer))
+    {
+        backend->tensor_get(layer.last_k, static_cast<char *>(layer.k->data) + dst_offset, 0, nbytes);
+        backend->tensor_get(layer.last_v, static_cast<char *>(layer.v->data) + dst_offset, 0, nbytes);
+        return;
+    }
+
+    std::vector<float> staging(nbytes / sizeof(float));
+    backend->tensor_get(layer.last_k, staging.data(), 0, nbytes);
+    backend->tensor_set(layer.k, staging.data(), dst_offset, nbytes);
+    backend->tensor_get(layer.last_v, staging.data(), 0, nbytes);
+    backend->tensor_set(layer.v, staging.data(), dst_offset, nbytes);
+}
+
+void KvCache::commit(const Backend *backend, const int n_tokens)
+{
     if (n_past_ + n_tokens > max_ctx_)
     {
         throw std::runtime_error("kv cache overflow");
     }
 
-    const size_t row_elems = static_cast<size_t>(head_dim) * static_cast<size_t>(n_head_kv);
-    const size_t nbytes = row_elems * static_cast<size_t>(n_tokens) * sizeof(float);
-    const size_t dst_offset = static_cast<size_t>(n_past_) * row_elems * sizeof(float);
-
-    std::vector<float> staging(row_elems * static_cast<size_t>(n_tokens));
-    backend->tensor_get(entry.last_k, staging.data(), 0, nbytes);
-    backend->tensor_set(entry.k, staging.data(), dst_offset, nbytes);
-    backend->tensor_get(entry.last_v, staging.data(), 0, nbytes);
-    backend->tensor_set(entry.v, staging.data(), dst_offset, nbytes);
+    for (auto &layer : layers_)
+    {
+        commit_layer(layer, backend);
+    }
+    n_past_ += n_tokens;
 }
 
 } // namespace tllm::runtime

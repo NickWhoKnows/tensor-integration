@@ -37,8 +37,8 @@ void print_usage(const char *program) {
 
 struct Options {
   std::string model_path = "models/Llama-3.2-1B-Instruct.gguf";
-  std::string prompt = "Hi You are steve";
-  int n_generate = 500;
+  std::string prompt = "Hello World";
+  int n_generate = 640;
   bool verify = false;
   bool force_cpu = false;
 };
@@ -103,7 +103,7 @@ void run_inference(const Options &options) {
     std::cout << "  token_embd.type: " << embd->type << "\n";
   }
 
-  std::vector<int32_t> tokens = model.tokenize(options.prompt);
+  std::vector<int32_t> tokens = tokenizer.encode(options.prompt);
 
   std::cout << "Prompt: \"" << options.prompt << "\"\n"
             << "Input tokens (" << tokens.size() << "): ";
