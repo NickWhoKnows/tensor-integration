@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(GGML_METAL ON CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
 add_subdirectory(include/ggml)
 
 add_library(tllm STATIC
@@ -20,8 +20,6 @@ add_library(tllm STATIC
     src/ops/ffn.cpp
     src/ops/attn.cpp
     src/ops/embed.cpp
-    src/runtime/compute.cpp
-    src/runtime/backend.cpp
     src/runtime/kv_cache.cpp
 )
 

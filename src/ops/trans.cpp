@@ -1,36 +1,38 @@
 #include "tllm/ops/trans.h"
 
-#include <iostream>
+#include "tllm/model/weights.h"
 
-namespace tllm::ops {
+namespace tllm::ops
+{
 
-Layer::~Layer() {}
+Layer::Layer(const int index, ggml_context * /*ctx*/, const model::Config &config,
+             gguf::Loader &loader)
+    : config_(config)
+{
+    const model::BlockWeights names = model::block_weights(index);
+    attn_ = AttnWeights{
+        .norm = loader.wrap_tensor(names.attn_norm),
+        .q = loader.wrap_tensor(names.attn_q),
+        .k = loader.wrap_tensor(names.attn_k),
+        .v = loader.wrap_tensor(names.attn_v),
+        .output = loader.wrap_tensor(names.attn_output),
+    };
+    ffn_ = FfnWeights{
+        .norm = loader.wrap_tensor(names.ffn_norm),
+        .gate = loader.wrap_tensor(names.ffn_gate),
+        .up = loader.wrap_tensor(names.ffn_up),
+        .down = loader.wrap_tensor(names.ffn_down),
+    };
+}
 
 ggml_tensor *Layer::block_transformer(ggml_context *ctx, ggml_tensor *x, ggml_tensor *positions,
                                       runtime::LayerKvCache *cache,
-                                      const int position_offset) {
-  ggml_tensor *attn_out = attention(ctx, x, attn_weights_, config_, positions, cache, position_offset);
-  ggml_tensor *after_attn = ggml_add(ctx, x, attn_out);
-  ggml_tensor *ffn_out = ffn(ctx, after_attn, ffn_weights_, config_.rms_norm_eps);
-  return ggml_add(ctx, after_attn, ffn_out);
-}
-
-void Layer::print_attn_weights() {
-
-  const float *attn_values =
-      static_cast<const float *>(attn_weights_.output->data);
-  std::cout << "Attention block " << block_index_ << " output ["
-            << attn_weights_.output->ne[0] << ", "
-            << attn_weights_.output->ne[1] << "]: " << attn_values[0] << ", "
-            << attn_values[1] << "\n";
-}
-
-void Layer::print_ffn_weights() {
-  std::cout << "FFN Weights: " << ffn_weights_.norm->name << std::endl;
-  const float *ffn_values = static_cast<const float *>(ffn_weights_.down->data);
-  std::cout << "FFN block " << block_index_ << " output ["
-            << ffn_weights_.down->ne[0] << ", " << ffn_weights_.down->ne[1]
-            << "]: " << ffn_values[0] << ", " << ffn_values[1] << "\n";
+                                      const int position_offset) const
+{
+    ggml_tensor *attn_out = attention(ctx, x, attn_, config_, positions, cache, position_offset);
+    ggml_tensor *x_attn = ggml_add(ctx, x, attn_out);
+    ggml_tensor *ffn_out = ffn(ctx, x_attn, ffn_, config_.rms_norm_eps);
+    return ggml_add(ctx, x_attn, ffn_out);
 }
 
 } // namespace tllm::ops

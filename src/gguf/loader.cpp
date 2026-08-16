@@ -1,8 +1,5 @@
 #include "tllm/gguf/loader.h"
 
-#include "ggml-alloc.h"
-#include "ggml-backend.h"
-
 #include <fcntl.h>
 #include <iostream>
 #include <sstream>
@@ -120,8 +117,6 @@ Loader::Loader(const std::string &path) : path_(path)
 
 Loader::~Loader()
 {
-    release_backend_weights();
-
     if (ctx_ != nullptr)
     {
         ggml_free(ctx_);
@@ -439,49 +434,6 @@ ggml_tensor *Loader::wrap_tensor(const std::string &name)
     tensor->data = const_cast<void *>(info->data);
     ggml_set_name(tensor, info->name.c_str());
     return tensor;
-}
-
-void Loader::materialize_on_backend(ggml_backend_t backend)
-{
-    for (ggml_tensor *tensor = ggml_get_first_tensor(ctx_); tensor != nullptr;
-         tensor = ggml_get_next_tensor(ctx_, tensor))
-    {
-        if (tensor->view_src == nullptr)
-        {
-            tensor->data = nullptr;
-        }
-    }
-
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx_, backend);
-    if (buffer == nullptr)
-    {
-        throw std::runtime_error("failed to allocate model weights on backend");
-    }
-
-    buffer_ = buffer;
-
-    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-    for (ggml_tensor *tensor = ggml_get_first_tensor(ctx_); tensor != nullptr;
-         tensor = ggml_get_next_tensor(ctx_, tensor))
-    {
-        const TensorInfo *info = find_tensor(tensor->name);
-        if (info == nullptr || info->data == nullptr)
-        {
-            continue;
-        }
-
-        ggml_backend_tensor_set(tensor, info->data, 0, ggml_nbytes(tensor));
-    }
-}
-
-void Loader::release_backend_weights()
-{
-    if (buffer_ != nullptr)
-    {
-        ggml_backend_buffer_free(buffer_);
-        buffer_ = nullptr;
-    }
 }
 
 int64_t Loader::total_parameters() const
