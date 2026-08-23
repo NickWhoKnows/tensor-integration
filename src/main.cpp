@@ -68,7 +68,7 @@ int main(int argc, char **argv)
         ggml_context *ctx = loader.context();
         const size_t prompt_token_count = tokens.size();
         tokens = model.generate(ctx, std::move(tokens), options.n_generate);
-        // std::cout << tokenizer.format_generation(tokens, prompt_token_count) << "\n";
+        std::cout << "\n\n" << tokenizer.format_generation(tokens, prompt_token_count) << "\n";
     }
     catch (const std::exception &ex)
     {

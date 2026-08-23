@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -128,7 +127,7 @@ void Model::run(ggml_context *ctx, ggml_tensor *root, const std::vector<int32_t>
     }
 
     set_inputs(graph, tokens, position_offset);
-    ggml_backend_cpu_set_n_threads(backend_, 1);
+    ggml_backend_cpu_set_n_threads(backend_, 4);
     if (ggml_backend_graph_compute(backend_, graph) != GGML_STATUS_SUCCESS)
     {
         throw std::runtime_error("graph compute failed");
@@ -160,37 +159,9 @@ int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &token
     {
         cache->advance(static_cast<int>(tokens.size()));
     }
-    std::cout << tokenizer_.format_generation({next}, 0);
     return next;
 }
 
-void Model::print_top_logits(ggml_context *ctx, const std::vector<int32_t> &tokens, const int k) const
-{
-    ggml_tensor *logits = forward(ctx, tokens, nullptr);
-    run(ctx, logits, tokens, 0, nullptr);
-
-    const int pos = static_cast<int>(logits->ne[1]) - 1;
-    const std::vector<float> row = logits_at(logits, pos);
-
-    std::vector<std::pair<float, int32_t>> scored;
-    scored.reserve(row.size());
-    for (int id = 0; id < static_cast<int>(row.size()); ++id)
-    {
-        scored.emplace_back(row[static_cast<size_t>(id)], id);
-    }
-
-    const int top_k = std::min(k, static_cast<int>(scored.size()));
-    std::partial_sort(scored.begin(), scored.begin() + top_k, scored.end(),
-                      [](const auto &a, const auto &b) { return a.first > b.first; });
-
-    std::cout << "Top-" << top_k << " logits at position " << pos << ":\n";
-    for (int i = 0; i < top_k; ++i)
-    {
-        const int32_t id = scored[static_cast<size_t>(i)].second;
-        std::cout << "  " << (i + 1) << ": id=" << id << " logit=" << scored[static_cast<size_t>(i)].first
-                  << " piece=\"" << tokenizer_.token_to_piece(id) << "\"\n";
-    }
-}
 
 std::vector<int32_t> Model::generate(ggml_context *ctx, std::vector<int32_t> tokens, const int n_new_tokens) const
 {
