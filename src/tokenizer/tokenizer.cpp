@@ -6,7 +6,6 @@
 #include <cctype>
 #include <queue>
 #include <regex>
-#include <sstream>
 #include <stdexcept>
 
 namespace tllm::tokenizer
@@ -34,11 +33,7 @@ struct BigramCompare
 {
     bool operator()(const Bigram &a, const Bigram &b) const
     {
-        if (a.rank != b.rank)
-        {
-            return a.rank > b.rank;
-        }
-        return a.left > b.left;
+        return a.rank != b.rank ? a.rank > b.rank : a.left > b.left;
     }
 };
 
@@ -50,7 +45,7 @@ bool is_llama_bpe_pre(const std::string &pre)
 std::string normalize_llama_piece(const std::string &piece)
 {
     std::string out;
-    out.reserve(piece.size());
+    out.reserve(piece.size() * 2);
 
     size_t i = 0;
     while (i < piece.size() && piece[i] == ' ')
@@ -60,7 +55,19 @@ std::string normalize_llama_piece(const std::string &piece)
         ++i;
     }
 
-    out.append(piece, i, std::string::npos);
+    while (i < piece.size())
+    {
+        if (piece[i] == '\n')
+        {
+            out.push_back(static_cast<char>(0xC4));
+            out.push_back(static_cast<char>(0x8A));
+            ++i;
+            continue;
+        }
+
+        out.push_back(piece[i++]);
+    }
+
     return out;
 }
 
@@ -76,14 +83,19 @@ Tokenizer Tokenizer::from_gguf(const gguf::Loader &loader)
         tokenizer.token_to_id_.emplace(tokenizer.id_to_token_[i], static_cast<int32_t>(i));
     }
 
-    const auto merges = gguf::meta::read_string_array(loader, "tokenizer.ggml.merges");
-    tokenizer.load_bpe_ranks(merges);
+    tokenizer.load_bpe_ranks(gguf::meta::read_string_array(loader, "tokenizer.ggml.merges"));
 
     const auto pre = gguf::meta::read_string(loader, "tokenizer.ggml.pre").value_or("default");
     tokenizer.ignore_merges_ = is_llama_bpe_pre(pre);
-
     tokenizer.bos_id_ = gguf::meta::read_int(loader, "tokenizer.ggml.bos_token_id").value_or(-1);
     tokenizer.eos_id_ = gguf::meta::read_int(loader, "tokenizer.ggml.eos_token_id").value_or(-1);
+
+    const auto lookup = [&](const char *literal) {
+        const auto it = tokenizer.token_to_id_.find(literal);
+        return it == tokenizer.token_to_id_.end() ? -1 : it->second;
+    };
+    tokenizer.start_header_id_ = lookup("<|start_header_id|>");
+    tokenizer.end_header_id_ = lookup("<|end_header_id|>");
 
     return tokenizer;
 }
@@ -98,9 +110,7 @@ void Tokenizer::load_bpe_ranks(const std::vector<std::string> &merges)
             continue;
         }
 
-        const std::string left = merges[i].substr(0, space);
-        const std::string right = merges[i].substr(space + 1);
-        bpe_ranks_.emplace(left + " " + right, static_cast<int>(i));
+        bpe_ranks_.emplace(merges[i].substr(0, space) + " " + merges[i].substr(space + 1), static_cast<int>(i));
     }
 }
 
@@ -117,10 +127,8 @@ std::vector<std::string> Tokenizer::pretokenize(const std::string &text) const
         std::regex::ECMAScript | std::regex::optimize);
 
     std::vector<std::string> pieces;
-    auto begin = std::sregex_iterator(text.begin(), text.end(), k_llama3_regex);
-    const auto end = std::sregex_iterator();
-
-    for (auto it = begin; it != end; ++it)
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), k_llama3_regex), end = std::sregex_iterator(); it != end;
+         ++it)
     {
         if (!it->str().empty())
         {
@@ -204,12 +212,7 @@ std::vector<int32_t> Tokenizer::encode_piece(const std::string &piece) const
             return;
         }
 
-        Bigram bigram;
-        bigram.left = left;
-        bigram.right = right;
-        bigram.rank = rank;
-        bigram.text = left_token + right_token;
-        queue.push(bigram);
+        queue.push({left, right, rank, left_token + right_token});
     };
 
     std::priority_queue<Bigram, std::vector<Bigram>, BigramCompare> queue;
@@ -269,6 +272,44 @@ std::vector<int32_t> Tokenizer::encode_piece(const std::string &piece) const
     return tokens;
 }
 
+void Tokenizer::push_literal(std::vector<int32_t> &tokens, const std::string &literal) const
+{
+    const auto it = token_to_id_.find(literal);
+    if (it == token_to_id_.end())
+    {
+        throw std::runtime_error("unknown tokenizer literal: " + literal);
+    }
+
+    tokens.push_back(it->second);
+}
+
+void Tokenizer::encode_text(std::vector<int32_t> &tokens, const std::string &text) const
+{
+    for (const auto &piece : pretokenize(text))
+    {
+        const auto piece_tokens = encode_piece(piece);
+        tokens.insert(tokens.end(), piece_tokens.begin(), piece_tokens.end());
+    }
+}
+
+std::vector<int32_t> Tokenizer::encode_chat(const std::vector<ChatMessage> &messages,
+                                            const ChatTemplateOptions &options) const
+{
+    std::vector<int32_t> tokens;
+    for (const auto &[literal, value] : llama3_chat_segments(messages, options))
+    {
+        if (literal)
+        {
+            push_literal(tokens, value);
+        }
+        else
+        {
+            encode_text(tokens, value);
+        }
+    }
+    return tokens;
+}
+
 std::vector<int32_t> Tokenizer::encode(const std::string &text, const bool add_bos, const bool add_eos) const
 {
     std::vector<int32_t> tokens;
@@ -277,11 +318,7 @@ std::vector<int32_t> Tokenizer::encode(const std::string &text, const bool add_b
         tokens.push_back(bos_id_);
     }
 
-    for (const auto &piece : pretokenize(text))
-    {
-        const auto piece_tokens = encode_piece(piece);
-        tokens.insert(tokens.end(), piece_tokens.begin(), piece_tokens.end());
-    }
+    encode_text(tokens, text);
 
     if (add_eos && eos_id_ >= 0)
     {
@@ -300,53 +337,56 @@ std::string Tokenizer::token_to_piece(const int32_t token) const
     return id_to_token_[static_cast<size_t>(token)];
 }
 
-bool Tokenizer::is_bpe_marker(const std::string &piece, const size_t offset, const unsigned char suffix)
+bool Tokenizer::is_special_token(const int32_t token) const
 {
-    return offset + 1 < piece.size() && static_cast<unsigned char>(piece[offset]) == 0xC4 &&
-           static_cast<unsigned char>(piece[offset + 1]) == suffix;
+    if (token == bos_id_ || token == eos_id_ || token == start_header_id_ || token == end_header_id_)
+    {
+        return true;
+    }
+
+    const std::string piece = token_to_piece(token);
+    return piece.size() >= 4 && piece.starts_with("<|") && piece.ends_with("|>");
 }
 
 std::string Tokenizer::render_piece(const std::string &piece)
 {
     std::string text;
-    size_t i = is_bpe_marker(piece, 0, 0xA0) ? (text += ' ', 2) : 0;
-    while (i < piece.size())
+    for (size_t i = 0; i < piece.size();)
     {
-        if (is_bpe_marker(piece, i, 0x8A))
+        if (i + 1 < piece.size() && static_cast<unsigned char>(piece[i]) == 0xC4)
         {
-            text += '\n';
-            i += 2;
+            const unsigned char suffix = static_cast<unsigned char>(piece[i + 1]);
+            if (suffix == 0x80 || suffix == 0xA0)
+            {
+                text += ' ';
+                i += 2;
+                continue;
+            }
+            if (suffix == 0x8A)
+            {
+                text += '\n';
+                i += 2;
+                continue;
+            }
         }
-        else
-        {
-            text += piece[i++];
-        }
+
+        text += piece[i++];
     }
     return text;
 }
 
-std::string Tokenizer::decode(const std::vector<int32_t> &tokens) const
-{
-    return format_tokens(tokens, false);
-}
-
-std::string Tokenizer::format_generation(const std::vector<int32_t> &tokens) const
-{
-    return format_tokens(tokens, true);
-}
-
-std::string Tokenizer::format_tokens(const std::vector<int32_t> &tokens, const bool render) const
+std::string Tokenizer::format_generation(const std::vector<int32_t> &tokens, const size_t prompt_token_count) const
 {
     std::string text;
-    for (const int32_t token : tokens)
+    for (size_t i = prompt_token_count; i < tokens.size(); ++i)
     {
-        if (token == bos_id_ || token == eos_id_)
+        const int32_t token = tokens[i];
+        if (is_special_token(token))
         {
             continue;
         }
 
-        const std::string piece = token_to_piece(token);
-        text += render ? render_piece(piece) : piece;
+        text += render_piece(token_to_piece(token));
     }
     return text;
 }

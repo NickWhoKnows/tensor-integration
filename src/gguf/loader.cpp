@@ -1,7 +1,6 @@
 #include "tllm/gguf/loader.h"
 
 #include <fcntl.h>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <sys/mman.h>
@@ -450,33 +449,5 @@ int64_t Loader::total_parameters() const
     }
     return total;
 }
-
-void Loader::print_tensors() const
-{
-    std::cout << "Tensors:" << std::endl;
-    for (const auto &tensor : tensors_)
-    {
-        std::cout << "  " << tensor.name << " [";
-        for (size_t i = 0; i < tensor.dimensions.size(); ++i)
-        {
-            std::cout << tensor.dimensions[i];
-            if (i + 1 < tensor.dimensions.size())
-            {
-                std::cout << ", ";
-            }
-        }
-        std::cout << "] " << ggml_type_name(tensor.type) << std::endl;
-    }
-}
-
-void Loader::print_metadata() const
-{
-    std::cout << "Metadata:" << std::endl;
-    for (const auto &entry : metadata_)
-    {
-        std::cout << "  " << entry.key << std::endl;
-    }
-}
-
 
 } // namespace tllm::gguf

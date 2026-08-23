@@ -1,9 +1,7 @@
 #include "tllm/model/model.h"
 
 #include "tllm/model/weights.h"
-#include "tllm/ops/embed.h"
-#include "tllm/ops/norm.h"
-#include "tllm/ops/rope.h"
+#include "tllm/ops/layer.h"
 
 #include "ggml-alloc.h"
 #include "ggml-cpu.h"
@@ -16,7 +14,6 @@
 
 namespace tllm::model
 {
-
 namespace
 {
 
@@ -31,14 +28,14 @@ void set_input(ggml_cgraph *graph, const char *name, const void *data, const siz
 
 void set_inputs(ggml_cgraph *graph, const std::vector<int32_t> &tokens, const int position_offset)
 {
-    set_input(graph, "input_tokens", tokens.data(), tokens.size() * sizeof(int32_t));
+    set_input(graph, ops::kInputTokens, tokens.data(), tokens.size() * sizeof(int32_t));
 
     std::vector<int32_t> positions(tokens.size());
     for (size_t i = 0; i < tokens.size(); ++i)
     {
         positions[i] = position_offset + static_cast<int>(i);
     }
-    set_input(graph, "rope_positions", positions.data(), positions.size() * sizeof(int32_t));
+    set_input(graph, ops::kRopePositions, positions.data(), positions.size() * sizeof(int32_t));
 }
 
 } // namespace
@@ -85,25 +82,26 @@ Model::~Model()
     }
 }
 
-ggml_tensor *Model::forward(ggml_context *ctx, const std::vector<int32_t> &tokens,
-                            runtime::KvCache *cache) const
+ggml_tensor *Model::forward(ggml_context *ctx, const std::vector<int32_t> &tokens, runtime::KvCache *cache) const
 {
     const int n_past = cache != nullptr ? cache->n_past() : 0;
     ggml_tensor *positions = ops::make_positions_input(ctx, static_cast<int>(tokens.size()));
     ggml_tensor *x = ops::embed_tokens(ctx, token_embd_, tokens);
 
+    //apply each layer
     for (size_t i = 0; i < layers_.size(); ++i)
     {
         runtime::LayerKvCache *layer_cache = cache != nullptr ? &cache->layer(static_cast<int>(i)) : nullptr;
         x = layers_[i]->block_transformer(ctx, x, positions, layer_cache, n_past);
     }
 
+    //final layer norm
     x = ops::rms_norm(ctx, x, output_norm_, config_.rms_norm_eps);
     return ggml_mul_mat(ctx, token_embd_, x);
 }
 
-void Model::run(ggml_context *ctx, ggml_tensor *root, const std::vector<int32_t> &tokens,
-                const int position_offset, const runtime::KvCache *cache) const
+void Model::run(ggml_context *ctx, ggml_tensor *root, const std::vector<int32_t> &tokens, const int position_offset,
+                const runtime::KvCache *cache) const
 {
     ggml_cgraph *graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, root);
@@ -146,8 +144,7 @@ std::vector<float> Model::logits_at(ggml_tensor *logits, const int position) con
     return row;
 }
 
-int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &tokens,
-                            runtime::KvCache *cache) const
+int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &tokens, runtime::KvCache *cache) const
 {
     const int n_past = cache != nullptr ? cache->n_past() : 0;
     ggml_tensor *logits = forward(ctx, tokens, cache);
@@ -163,6 +160,7 @@ int32_t Model::predict_next(ggml_context *ctx, const std::vector<int32_t> &token
     {
         cache->advance(static_cast<int>(tokens.size()));
     }
+    std::cout << tokenizer_.format_generation({next}, 0);
     return next;
 }
 
@@ -194,8 +192,7 @@ void Model::print_top_logits(ggml_context *ctx, const std::vector<int32_t> &toke
     }
 }
 
-std::vector<int32_t> Model::generate(ggml_context *ctx, std::vector<int32_t> tokens,
-                                     const int n_new_tokens) const
+std::vector<int32_t> Model::generate(ggml_context *ctx, std::vector<int32_t> tokens, const int n_new_tokens) const
 {
     runtime::KvCache cache;
     cache.init(backend_, config_, std::min(config_.n_ctx, 2048));

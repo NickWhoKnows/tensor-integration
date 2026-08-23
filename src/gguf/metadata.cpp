@@ -59,6 +59,26 @@ std::optional<int32_t> read_int(const Loader &loader, const std::string &key)
     throw std::runtime_error("metadata key has unsupported integer type: " + key);
 }
 
+std::optional<float> read_float(const Loader &loader, const std::string &key)
+{
+    const MetaValue *value = loader.find_metadata(key);
+    if (value == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    if (const auto *v = as_scalar<float>(value))
+    {
+        return *v;
+    }
+    if (const auto *v = as_scalar<double>(value))
+    {
+        return static_cast<float>(*v);
+    }
+
+    throw std::runtime_error("metadata key has unsupported float type: " + key);
+}
+
 std::vector<std::string> read_string_array(const Loader &loader, const std::string &key)
 {
     const MetaValue *value = loader.find_metadata(key);
@@ -73,6 +93,32 @@ std::vector<std::string> read_string_array(const Loader &loader, const std::stri
     }
 
     throw std::runtime_error("metadata key is not a string array: " + key);
+}
+
+std::string require_string(const Loader &loader, const std::string &key)
+{
+    const auto value = read_string(loader, key);
+    if (!value.has_value())
+    {
+        throw std::runtime_error("missing model metadata key: " + key);
+    }
+    return *value;
+}
+
+int32_t require_int(const Loader &loader, const std::string &key)
+{
+    const auto value = read_int(loader, key);
+    if (!value.has_value())
+    {
+        throw std::runtime_error("missing model metadata key: " + key);
+    }
+    return *value;
+}
+
+float read_float_or(const Loader &loader, const std::string &key, const float fallback)
+{
+    const auto value = read_float(loader, key);
+    return value.has_value() ? *value : fallback;
 }
 
 } // namespace tllm::gguf::meta

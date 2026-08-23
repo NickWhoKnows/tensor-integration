@@ -9,18 +9,14 @@ set(GGML_METAL OFF CACHE BOOL "" FORCE)
 add_subdirectory(include/ggml)
 
 add_library(tllm STATIC
+    src/cli.cpp
     src/gguf/loader.cpp
     src/gguf/metadata.cpp
     src/model/config.cpp
     src/model/model.cpp
     src/tokenizer/tokenizer.cpp
-    src/ops/norm.cpp
-    src/ops/rope.cpp
-    src/ops/trans.cpp
-    src/ops/ffn.cpp
-    src/ops/attn.cpp
-    src/ops/embed.cpp
-    src/runtime/kv_cache.cpp
+    src/tokenizer/chat_template.cpp
+    src/ops/layer.cpp
 )
 
 target_include_directories(tllm

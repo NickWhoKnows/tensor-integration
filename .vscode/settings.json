@@ -1,0 +1,10 @@
+{
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+    "[c]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+    "C_Cpp.clang_format_path": "/opt/homebrew/bin/clang-format",
+    "C_Cpp.clang_format_style": "file"
+}
