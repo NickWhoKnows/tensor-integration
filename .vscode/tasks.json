@@ -1,0 +1,24 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Build",
+            "type": "shell",
+            "command": "cmake --build build -j$(sysctl -n hw.ncpu)",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "Run App",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/app",
+            "dependsOn": "CMake Build",
+            "problemMatcher": []
+        }
+    ]
+}
