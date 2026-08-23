@@ -5,7 +5,7 @@
             "name": "Debug tllm",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/tllm",
+            "program": "${workspaceFolder}/build/app",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
